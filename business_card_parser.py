@@ -161,7 +161,12 @@ if __name__ == "__main__":
         print("---- Extracted Info ----")
         print(json.dumps(extracted_info, indent=4))
 
+        output_filename = "extracted_card_data.json"
+        with open(output_filename, 'w') as file:
+            json.dump(extracted_info, file, indent=4, ensure_ascii=False)
 
+        print(f"Success: Data successfully saved to {output_filename}`")
+        
 
 
 
