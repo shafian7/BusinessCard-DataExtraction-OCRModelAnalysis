@@ -112,34 +112,22 @@ class BusinessCardParser:
 
         return ", ".join(address_parts) if address_parts else None
 
-    def parse_name(self, lines, email, designation, phone, address):
+    def parse_name_via_email(self, raw_text_list, email):
+        ''' So this parsing mechanism for name extraction makes
+        use of and assumes the fact that the person's name often composes
+        his/her email name. Inaccurate usually but still worth it'''
 
-        # Only look at top 50% because that is where person's name normally resides
-        top_lines = lines[:max(2, len(lines) // 2)]
-        exclusions = ['dr', 'prof', 'md', 'mbbs', 'fcps', 'mr', 'mrs', 'ms', 'chamber', 'time', 'appointment']
-        if email:exclusions.append(email.lower())
-        if designation: exclusions.append(designation.lower())
-        if phone: exclusions.append(re.sub(r'\D', '', phone))
-        if address: exclusions.extend([part.lower() for part in address.split(" ")])
+        if not email: return None
 
-        candidate_lines = []
+        email_prefix = email.split('@')[0].lower().replace(".", "")
 
-        for line in top_lines:
-            line = line.strip().lower()
+        for text in raw_text_list:
 
-            if '@' in line or re.search(r'\d', line):
-                continue
+            comparison_text = text.lower().replace(" ", "")
 
-            if any(ex in line for ex in exclusions):
-                continue
-
-            words = line.split()
-
-            if 2 <= len(words) <= 4:
-                alphabetic_words = [w for w in words if w.isalpha()]
-                if alphabetic_words and all(w[0].isupper() for w in alphabetic_words):
-                    return line
-
+            if email_prefix in comparison_text:
+                if '@' not in text:
+                    return text
         return None
 
     def process_card(self, path):
@@ -150,7 +138,7 @@ class BusinessCardParser:
         phone = self.parse_phone(raw_lines)
         designation = self.parse_designation(raw_lines)
         address = self.parse_address(raw_lines)
-        name = self.parse_name(raw_lines, email, designation, phone, address)
+        name = self.parse_name_via_email(raw_lines, email)
 
         return {
             "name": name, 'designation': designation, 'email': email,
