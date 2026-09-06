@@ -66,34 +66,74 @@ class OCRBenchmark:
             if len(results) > 0:
                 first_page = results[0]
 
-                if isinstance(first_page, dict) or hasattr(first_page, 'keys'):
-                    if 'rec_text' in first_page:
-                        lines=  list(first_page['rec_text'])
-                    elif hasattr(first_page, 'get') and first_page.get('rec_text'):
-                        lines = list(first_page.get('rec_text'))
-
-                elif isinstance(first_page, (list, tuple)):
+                # Case 1: Classic PaddleOCR format (List of Lists)
+                if isinstance(first_page, (list, tuple)) and len(first_page) > 0 and isinstance(first_page[0], (list, tuple)):
                     extracted = []
                     for item in first_page:
-                        if isinstance(item, list) and len(item) ==2 and isinstance(item[1], (tuple, list)):
+                        if isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[1], (tuple, list)):
                             try:
                                 y_coord = item[0][0][1]
                                 text = item[1][0]
-                                extracted.append((y_coord, text))
+                                extracted.append((float(y_coord), str(text)))
                             except (IndexError, TypeError):
                                 pass
                     extracted.sort(key=lambda x: x[0])
                     lines = [txt for _, txt in extracted]
+
+                # Case 2: New PaddleX API format (Dictionary/Object)
+                if not lines:
+                    def get_field(obj, keys):
+                        for k in keys:
+                            try:
+                                if hasattr(obj, 'get'):
+                                    v = obj.get(k)
+                                    if v is not None: return v
+                                v = obj[k]
+                                if v is not None: return v
+                            except Exception:
+                                pass
+                        for k in keys:
+                            if hasattr(obj, k):
+                                return getattr(obj, k)
+                        return None
+
+                    texts = get_field(first_page, ['rec_texts', 'rec_text', 'text', 'texts'])
+                    boxes = get_field(first_page, ['dt_polys', 'polys', 'boxes'])
+
+                    if texts is not None:
+                        # Convert generator or array elements safely to lists
+                        if hasattr(texts, '__iter__') and not isinstance(texts, (list, tuple)):
+                            texts = list(texts)
+                        if boxes is not None:
+                            if hasattr(boxes, '__iter__') and not isinstance(boxes, (list, tuple)):
+                                boxes = list(boxes)
+
+                        if boxes is not None and len(texts) == len(boxes):
+                            extracted = []
+                            for i in range(len(texts)):
+                                box = boxes[i]
+                                txt = str(texts[i])
+                                try:
+                                    box_arr = np.array(box)
+                                    if box_arr.ndim >= 2:
+                                        y_coord = float(np.min(box_arr[:, 1]))
+                                    else:
+                                        y_coord = float(box_arr[1])
+                                    extracted.append((y_coord, txt))
+                                except Exception:
+                                    extracted.append((0.0, txt))
+                            extracted.sort(key=lambda x: x[0])
+                            lines = [txt for _, txt in extracted]
+                        else:
+                            lines = [str(t) for t in texts]
 
         elapsed = time.perf_counter() - start_time
         return lines, elapsed
 
     def run_tesseract(self, img):
         start_time = time.perf_counter()
-
         raw_string = pytesseract.image_to_string(img)
         lines = [line.strip() for line in raw_string.split('\n') if line.strip()]
-
         elapsed = time.perf_counter() - start_time
         return lines, elapsed
 
