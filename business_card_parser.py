@@ -4,13 +4,15 @@ import cv2
 import numpy as np
 import easyocr
 import json
+import ollama
 
 class BusinessCardParser:
 
-    def __init__(self, languages=['en']):
+    def __init__(self, languages=['en'], model_name='llama3.2'):
         #Initialise right at start, avoids reinitialisation every time an image begins to get processed.
         print("OCR Engine Initialising")
         self.reader = easyocr.Reader(languages, gpu=False)
+        self.model_name = model_name
 
 
         # Keywords for obtaining/parsing designation from the business card
@@ -75,74 +77,53 @@ class BusinessCardParser:
         text_lines = [text for bbox, text, conf in sorted_results]
         return text_lines
 
-    def parse_email(self, lines):
-        email_regex = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z]{2,}'
-        full_text = " ".join(lines)
-        matches = re.findall(email_regex, full_text)
-        return matches[0] if matches else None
+    def parse_with_llama(self, raw_lines):
 
-    def parse_phone(self, lines):
-        phone_regex = r'(?:\+\d{1,3}[\s-]?)?\(?\d{2,4}\)?[\s-]?\d{3,4}[\s-]?\d{3,4}'
-        full_text = ' '.join(lines)
-        matches = re.findall(phone_regex, full_text)
-        for m in matches:
-            cleaned = re.sub(r'\D', '', m)
-            if 7 <= len(cleaned) <= 15:
-                return m.strip()
-        return None
+        # Parsing now done with local LLM with semantic logic in to intelligently extract and map fields.
+        print(f"Parsing extracted raw text using local LLM: {self.model_name}")
 
-    def parse_designation(self, lines):
-        found_designations = []
-        for line in lines:
-            line = line.lower()
-            if any (kw in line for kw in self.designation_keywords):
-                found_designations.append(line)
-        return ", ".join(found_designations) if found_designations else None
-    def parse_address(self, lines):
-        address_kw = ['street', 'st', 'avenue', 'ave', 'road', 'rd', 'hospital', 'college', 'chamber']
-        address_parts = []
-        zip_pattern = r'\b\d{5}(?:-\d{4})?\b|\b\d{6}\b'
+        sys_prompt = """
+        You are an AI data extraction agent. You will be given a list of text strings extracted from a business card via OCR.
+        You task is to analyse the text and map it into a strict JSON object with following keys:
+        -"name": The full name of the person, excluding honorifics like Mr. Mrs. Ms. or Dr. if separate or include them properly
+        -"designation": The job title, role and/or rank of the person
+        -"email": The email address of the person
+        -"phone": The phone number (with country code if present)
+        -"address": The physical location, chamber or company address provided
+        
+        If a field cannot be found, set its value to null. Return ONLY valid JSON.
+        """
 
-        for line in lines:
-            line = line.lower()
-            if any (kw in line for kw in address_kw) or bool(re.search(zip_pattern, line)):
-                # Exclusion of possible emails, phones and designations
-                if '@' not in line and not re.search(r'\++?\d{10,}', line):
-                    address_parts.append(line.strip())
+        user_prompt = f"Here is the raw OCR text array from the business card: \n {json.dumps(raw_lines, indent=2)}"
 
-        return ", ".join(address_parts) if address_parts else None
+        try:
+            response = ollama.chat(
+                model = self.model_name,
+                messages = [
+                    {'role': 'system', 'content': sys_prompt},
+                    {'role': 'user', 'content': user_prompt}
+                ],
+                format='json', #Additional safety measure to ensure ollama generates only valid JSON responses
+                options={'temperature': 0.1}
+            )
+            return json.loads(response['message']['content'])
+        except Exception as e:
+            print(f"Error communicating with Ollama: {e}")
+            return {
+                "name": None, "designation": None, "email": None,
+                "phone": None, "address": None
+            }
 
-    def parse_name_via_email(self, raw_text_list, email):
-        ''' So this parsing mechanism for name extraction makes
-        use of and assumes the fact that the person's name often composes
-        his/her email name. Inaccurate usually but still worth it'''
-
-        if not email: return None
-
-        email_prefix = email.split('@')[0].lower().replace(".", "")
-
-        for text in raw_text_list:
-
-            comparison_text = text.lower().replace(" ", "")
-
-            if email_prefix in comparison_text:
-                if '@' not in text:
-                    return text
-        return None
 
     def process_card(self, path):
 
         raw_lines = self.extract_text_positions(path)
 
-        email = self.parse_email(raw_lines)
-        phone = self.parse_phone(raw_lines)
-        designation = self.parse_designation(raw_lines)
-        address = self.parse_address(raw_lines)
-        name = self.parse_name_via_email(raw_lines, email)
+        extracted_data = self.parse_with_llama(raw_lines)
 
         return {
-            "name": name, 'designation': designation, 'email': email,
-            'phone': phone, 'address': address, 'raw_text':raw_lines
+        **extracted_data,
+        "raw_text": raw_lines
         }
 
 if __name__ == "__main__":
@@ -166,7 +147,7 @@ if __name__ == "__main__":
             json.dump(extracted_info, file, indent=4, ensure_ascii=False)
 
         print(f"Success: Data successfully saved to {output_filename}`")
-        
+
 
 
 
